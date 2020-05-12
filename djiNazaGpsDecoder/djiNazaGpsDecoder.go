@@ -3,6 +3,7 @@ package djiNazaGpsDecoder
 import (
   "log"
   "fmt"
+  "math"
   "io"
   "golang-djiNazaGpsDecoder/go-serial/serial"
 )
@@ -18,11 +19,11 @@ type serialRead struct
 {
   port io.ReadWriteCloser
 
-  payload [NAZA_MESSAGE_MAX_PAYLOAD_LENGTH]int16
-  sequence int16
-  count int16
-  messageId int16
-  messageLength int16
+  payload [NAZA_MESSAGE_MAX_PAYLOAD_LENGTH]byte
+  sequence int
+  count int
+  messageId byte
+  messageLength int
   checksum1 byte
   checksum2 byte
 }
@@ -37,7 +38,7 @@ type decodedInformation struct
   latitude float64
   altitude float64
   speed float64
-  // fix FixType
+  fix byte
   satellites byte
   heading float64
   courseOverGround float64
@@ -52,6 +53,8 @@ type decodedInformation struct
   second byte
   lastLock byte
   locked byte
+  hardwareVersion VersionType
+  firmwareVersion VersionType
 }
 
 // GPSPayloadPositions
@@ -173,7 +176,6 @@ type VersionType struct
 }
 
 func OpenSerial(serialRead serialRead, portName string, baudRate uint) {
-  serialRead.payload = make([]int16, NAZA_MESSAGE_MAX_PAYLOAD_LENGTH)
 
   // Set up options.
   options := serial.OpenOptions{
@@ -194,7 +196,7 @@ func OpenSerial(serialRead serialRead, portName string, baudRate uint) {
   }
 }
 
-func ReadByte(serialRead serialRead) int {
+func ReadByte(serialRead serialRead, deInfo decodedInformation) byte {
   rx_buffer := make([]byte, 128)
   n, err := serialRead.port.Read(rx_buffer)
   if err != nil {
@@ -204,14 +206,14 @@ func ReadByte(serialRead serialRead) int {
   } else if len(rx_buffer) > 0 {
     rx_buffer = rx_buffer[:n]
     for i := 0; i < n; i++ {
-      var decodedMessage = decode(serialRead, rx_buffer[i])
+      var decodedMessage = decode(serialRead, deInfo, rx_buffer[i])
       if decodedMessage != NAZA_MESSAGE_NONE_TYPE {
         return decodedMessage
       }
     }
   	fmt.Println("Rx: ", rx_buffer)
   }
-  return int(NAZA_MESSAGE_NONE_TYPE)
+  return NAZA_MESSAGE_NONE_TYPE
 }
 
 func CloseSerial(serialRead serialRead) {
@@ -219,40 +221,40 @@ func CloseSerial(serialRead serialRead) {
   defer serialRead.port.Close()
 }
 
-func decode(serialRead serialRead, deInfo decodedInformation, input int16) byte {
+func decode(serialRead serialRead, deInfo decodedInformation, input byte) byte {
         // header (part 1 - 0x55)
-        if ((serialRead.sequence == 0) && (input == 0x55)) {
+        if ((serialRead.sequence == 0) && (byte(input) == 0x55)) {
             serialRead.sequence++
         // header (part 2 - 0xaa)
-        } else if ((serialRead.sequence == 1) && (input == 0xaa)) {
+        } else if ((serialRead.sequence == 1) && (byte(input) == 0xaa)) {
             serialRead.checksum1 = 0
             serialRead.checksum2 = 0
             serialRead.sequence++
         } else if (serialRead.sequence == 2) {
             serialRead.messageId = input
-            updateChecksum(input)
+            updateChecksum(serialRead, input)
             serialRead.sequence++
 
         // message id
         // message payload length (should match message id)
         // store payload in buffer
-        } else if ((serialRead.sequence == 3) && (((serialRead.messageId == NAZA_MESSAGE_GPS_TYPE) && (input == NAZA_MESSAGE_GPS_SIZE)) || ((serialRead.messageId == NAZA_MESSAGE_MAGNETOMETER_TYPE) && (input == NAZA_MESSAGE_MAGNETOMETER_SIZE)) || ((serialRead.messageId == NAZA_MESSAGE_MODULE_VERSION_TYPE) && (input == NAZA_MESSAGE_MODULE_VERSION_SIZE)))) {
-            serialRead.messageLength = input
+        } else if ((byte(serialRead.sequence) == 3) && (((byte(serialRead.messageId) == NAZA_MESSAGE_GPS_TYPE) && (byte(input) == NAZA_MESSAGE_GPS_SIZE)) || ((byte(serialRead.messageId) == NAZA_MESSAGE_MAGNETOMETER_TYPE) && (byte(input) == NAZA_MESSAGE_MAGNETOMETER_SIZE)) || ((byte(serialRead.messageId) == NAZA_MESSAGE_MODULE_VERSION_TYPE) && (byte(input) == NAZA_MESSAGE_MODULE_VERSION_SIZE)))) {
+            serialRead.messageLength = int(input)
             serialRead.count = 0
-            updateChecksum(input)
+            updateChecksum(serialRead, input)
             serialRead.sequence++
-        } else if (sequence == 4) {
+        } else if (serialRead.sequence == 4) {
             serialRead.count += 1
             serialRead.payload[serialRead.count] = input
-            updateChecksum(input)
+            updateChecksum(serialRead, input)
             if (serialRead.count >= serialRead.messageLength) {
                 serialRead.sequence++
             }
         // verify checksum #1
-        } else if ((serialRead.sequence == 5) && (input == checksum1)) {
+        } else if ((serialRead.sequence == 5) && (byte(input) == serialRead.checksum1)) {
             serialRead.sequence++
         // verify checksum #2
-        } else if ((serialRead.sequence == 6) && (input == checksum2)) {
+        } else if ((serialRead.sequence == 6) && (byte(input) == serialRead.checksum2)) {
             serialRead.sequence++
         } else {
             serialRead.sequence = 0
@@ -263,41 +265,41 @@ func decode(serialRead serialRead, deInfo decodedInformation, input int16) byte 
             serialRead.sequence = 0
 
             // Decode GPS data
-            if (serialRead.messageId == NAZA_MESSAGE_GPS_TYPE) {
-                deInfo.mask = payload[NAZA_MESSAGE_POS_XM]
-                deInfo.time = pack4(NAZA_MESSAGE_POS_DT, mask)
-                deInfo.second = time & 0x3f
+            if (byte(serialRead.messageId) == NAZA_MESSAGE_GPS_TYPE) {
+                var mask = serialRead.payload[NAZA_MESSAGE_POS_XM]
+                var time = pack4(serialRead, NAZA_MESSAGE_POS_DT, mask)
+                deInfo.second = byte(time) & 0x3f
                 time >>= 6
-                deInfo.minute = time & 0x3f
+                deInfo.minute = byte(time) & 0x3f
                 time >>= 6
-                deInfo.hour = time & 0x0f
+                deInfo.hour = byte(time) & 0x0f
                 time >>= 4
-                deInfo.day = time & 0x1f
+                deInfo.day = byte(time) & 0x1f
                 time >>= 5
                 if (deInfo.hour > 7) {
-                    day++
+                    deInfo.day++
                 }
-                deInfo.month = time & 0x0f
+                deInfo.month = byte(time) & 0x0f
                 time >>= 4
-                deInfo.year = time & 0x7f
-                deInfo.longitude = pack4(NAZA_MESSAGE_POS_LO, mask) / 10000000.0
-                deInfo.latitude = pack4(NAZA_MESSAGE_POS_LA, mask) / 10000000.0
-                deInfo.altitude =  pack4(NAZA_MESSAGE_POS_AL, mask) / 1000.0
-                var northVelocity =  pack4(NAZA_MESSAGE_POS_NV, mask) / 100.0
-                var eastVelocity = pack4(NAZA_MESSAGE_POS_EV, mask) / 100.0
-                deInfo.speed = sqrtf(northVelocity * northVelocity + eastVelocity * eastVelocity)
-                deInfo.courseOverGround = atan2f(eastVelocity, northVelocity) * 180.0 / M_PI
+                deInfo.year = byte(time) & 0x7f
+                deInfo.longitude = float64(pack4(serialRead, NAZA_MESSAGE_POS_LO, mask) / 10000000.0)
+                deInfo.latitude = float64(pack4(serialRead, NAZA_MESSAGE_POS_LA, mask) / 10000000.0)
+                deInfo.altitude =  float64(pack4(serialRead, NAZA_MESSAGE_POS_AL, mask) / 1000.0)
+                var northVelocity =  pack4(serialRead, NAZA_MESSAGE_POS_NV, mask) / 100.0
+                var eastVelocity = pack4(serialRead, NAZA_MESSAGE_POS_EV, mask) / 100.0
+                deInfo.speed = math.Sqrt(float64(northVelocity * northVelocity + eastVelocity * eastVelocity))
+                deInfo.courseOverGround = math.Atan2(float64(eastVelocity), float64(northVelocity)) * 180.0 / math.Pi
                 if (deInfo.courseOverGround < 0) {
                     deInfo.courseOverGround += 360.0
                 }
-                deInfo.verticalSpeedIndicator = -pack4(NAZA_MESSAGE_POS_DV, mask) / 100.0
-                deInfo.verticalDilutionOfPrecision = pack2(NAZA_MESSAGE_POS_VD, mask) / 100.0
-                var ndop = pack2(NAZA_MESSAGE_POS_ND, mask) / 100.0
-                var edop = pack2(NAZA_MESSAGE_POS_ED, mask) / 100.0
-                deInfo.horizontalDilutionOfPrecision = sqrtf(ndop * ndop + edop * edop)
-                deInfo.satellites = payload[NAZA_MESSAGE_POS_NS]
-                var fixType = payload[NAZA_MESSAGE_POS_FT] ^ mask
-                var fixFlags = payload[NAZA_MESSAGE_POS_SF] ^ mask
+                deInfo.verticalSpeedIndicator = float64(-pack4(serialRead, NAZA_MESSAGE_POS_DV, mask) / 100.0)
+                deInfo.verticalDilutionOfPrecision = float64(pack2(serialRead, NAZA_MESSAGE_POS_VD, mask) / 100.0)
+                var ndop = pack2(serialRead, NAZA_MESSAGE_POS_ND, mask) / 100.0
+                var edop = pack2(serialRead, NAZA_MESSAGE_POS_ED, mask) / 100.0
+                deInfo.horizontalDilutionOfPrecision = float64(math.Sqrt(float64(ndop) * float64(ndop) + float64(edop) * float64(edop)))
+                deInfo.satellites = serialRead.payload[NAZA_MESSAGE_POS_NS]
+                var fixType = serialRead.payload[NAZA_MESSAGE_POS_FT] ^ mask
+                var fixFlags = serialRead.payload[NAZA_MESSAGE_POS_SF] ^ mask
                 switch (fixType) {
                   case 2:
                       deInfo.fix = FIX_2D
@@ -309,19 +311,19 @@ func decode(serialRead serialRead, deInfo decodedInformation, input int16) byte 
                       deInfo.fix = NO_FIX
                       break
                   }
-                if ((deInfo.fix != NO_FIX) && (fixFlags & 0x02)) {
-                    deInfo.fix = FIX_DGPS
-                }
-                var lock = pack2(NAZA_MESSAGE_POS_SN, 0x00)
-                var locked = (lock == deInfo.lastLock + 1)
-                deInfo.lastLock = lock
+                // if ((deInfo.fix != NO_FIX) && (fixFlags & 0x02)) {
+                //     deInfo.fix = FIX_DGPS
+                // }
+                var lock = pack2(serialRead, NAZA_MESSAGE_POS_SN, 0x00)
+                var locked = (lock == int16(deInfo.lastLock + 1))
+                deInfo.lastLock = byte(lock)
             // Decode magnetometer data (not tilt compensated)
             // To calculate the heading (not tilt compensated) you need to do atan2 on the resulting y any a values, convert radians to degrees and add 360 if the result is negative.
-            } else if (messageId == NAZA_MESSAGE_MAGNETOMETER_TYPE) {
-                var mask = payload[4]
+            } else if (serialRead.messageId == NAZA_MESSAGE_MAGNETOMETER_TYPE) {
+                var mask = serialRead.payload[4]
                 mask = (((mask ^ (mask >> 4)) & 0x0F) | ((mask << 3) & 0xF0)) ^ (((mask & 0x01) << 3) | ((mask & 0x01) << 7))
-                var x = pack2(NAZA_MESSAGE_POS_CX, mask)
-                var y = pack2(NAZA_MESSAGE_POS_CY, mask)
+                var x = pack2(serialRead, NAZA_MESSAGE_POS_CX, mask)
+                var y = pack2(serialRead, NAZA_MESSAGE_POS_CY, mask)
                 if (x > deInfo.magXMax) {
                     deInfo.magXMax = x
                 }
@@ -334,35 +336,34 @@ func decode(serialRead serialRead, deInfo decodedInformation, input int16) byte 
                 if (y < deInfo.magYMin) {
                     deInfo.magYMin = y
                 }
-                heading = computeVectorAngle(y - ((deInfo.magYMax + deInfo.magYMin) / 2), x - ((deInfo.magXMax + deInfo.magXMin) / 2))
+                deInfo.heading = computeVectorAngle(y - ((deInfo.magYMax + deInfo.magYMin) / 2), x - ((deInfo.magXMax + deInfo.magXMin) / 2))
             } else if (serialRead.messageId == NAZA_MESSAGE_MODULE_VERSION_TYPE) {
-                firmwareVersion.version = pack4(NAZA_MESSAGE_POS_FW, 0x00)
-                hardwareVersion.version = pack4(NAZA_MESSAGE_POS_HW, 0x00)
+                deInfo.firmwareVersion.version = byte(pack4(serialRead, NAZA_MESSAGE_POS_FW, 0x00))
+                deInfo.hardwareVersion.version = byte(pack4(serialRead, NAZA_MESSAGE_POS_HW, 0x00))
             }
-            return messageId
+            return serialRead.messageId
         } else {
             return NAZA_MESSAGE_NONE_TYPE
         }
     }
 
-    func pack4(i byte, mask byte) int32 {
+    func pack4(serialRead serialRead, i byte, mask byte) int32 {
         var b[4] byte
-
-        for j = 0; j < 4; j++ {
-          v.b[j] = payload[i + j] ^ mask
+        for j := 0; j < 4; j++ {
+          b[j] = serialRead.payload[int(i) + j] ^ mask
         }
         return int32(b)
     }
 
-    func pack2(i byte, mask byte) int16 {
+    func pack2(serialRead serialRead, i byte, mask byte) int16 {
         var b[2] byte
         for j := 0; j < 2; j++ {
-            b[j] = payload[i + j] ^ mask
+            b[j] = serialRead.payload[int(i) + j] ^ mask
         }
         return int16(b)
     }
 
-    func updateChecksum(serialRead serialRead, input int16) {
+    func updateChecksum(serialRead serialRead, input byte) {
         serialRead.checksum1 += input
         serialRead.checksum2 += serialRead.checksum1
     }
@@ -371,8 +372,8 @@ func decode(serialRead serialRead, deInfo decodedInformation, input int16) byte 
         return radians * RAD_TO_DEG
     }
 
-    func computeVectorAngle(float y, float x) float64 {
-      var degrees = radiansToDegrees(-atan2f(y, x))
+    func computeVectorAngle(y int16, x int16) float64 {
+      var degrees = radiansToDegrees(-math.Atan2(float64(y), float64(x)))
 
       if degrees < 0 {
           degrees += 360.0
