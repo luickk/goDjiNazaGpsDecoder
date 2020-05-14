@@ -5,5 +5,13 @@ import (
 )
 
 func main() {
-  print(djiNazaGpsDecoder.MESSAGE_HEADER_SIZE)
+  var sRead djiNazaGpsDecoder.SerialRead
+  var decInfo djiNazaGpsDecoder.DecodedInformation
+
+  djiNazaGpsDecoder.OpenSerial(&sRead, "/dev/serial0")
+  for {
+    djiNazaGpsDecoder.ReadByte(&sRead, &decInfo)
+    println(int(decInfo.Satellites))
+    println(int(decInfo.Heading))
+  }
 }
