@@ -34,8 +34,8 @@ type DecodedInformation struct
   MagXMax int16
   MagYMin int16
   MagYMax int16
-  Longitude float64
-  Latitude float64
+  Longitude float32
+  Latitude float32
   Altitude float64
   Speed float64
   Fix byte
@@ -163,16 +163,16 @@ const (
 
 type VersionSchemeType struct
 {
-  revision byte
-  build byte
-  minor byte
-  major byte
+  Revision byte
+  Build byte
+  Minor byte
+  Major byte
 }
 
 type VersionType struct
 {
-    version byte
-    scheme VersionSchemeType
+    Version byte
+    Scheme VersionSchemeType
 }
 
 func OpenSerial(serialRead *SerialRead, portName string) {
@@ -244,8 +244,8 @@ func decode(serialRead *SerialRead, deInfo *DecodedInformation, input byte) byte
             updateChecksum(serialRead, input)
             serialRead.Sequence++
         } else if (serialRead.Sequence == 4) {
-            serialRead.Count += 1
             serialRead.Payload[serialRead.Count] = input
+            serialRead.Count += 1
             updateChecksum(serialRead, input)
             if (serialRead.Count >= serialRead.MessageLength) {
                 serialRead.Sequence++
@@ -282,8 +282,8 @@ func decode(serialRead *SerialRead, deInfo *DecodedInformation, input byte) byte
                 deInfo.Month = byte(time) & 0x0f
                 time >>= 4
                 deInfo.Year = byte(time) & 0x7f
-                deInfo.Longitude = float64(pack4FromPayload(serialRead, NAZA_MESSAGE_POS_LO, mask) / 10000000.0)
-                deInfo.Latitude = float64(pack4FromPayload(serialRead, NAZA_MESSAGE_POS_LA, mask) / 10000000.0)
+                deInfo.Longitude = float32(pack4Float32FromPayload(serialRead, NAZA_MESSAGE_POS_LO, mask) / 10000000)
+                deInfo.Latitude = float32(pack4Float32FromPayload(serialRead, NAZA_MESSAGE_POS_LA, mask) / 10000000)
                 deInfo.Altitude =  float64(pack4FromPayload(serialRead, NAZA_MESSAGE_POS_AL, mask) / 1000.0)
                 var northVelocity =  pack4FromPayload(serialRead, NAZA_MESSAGE_POS_NV, mask) / 100.0
                 var eastVelocity = pack4FromPayload(serialRead, NAZA_MESSAGE_POS_EV, mask) / 100.0
@@ -339,8 +339,8 @@ func decode(serialRead *SerialRead, deInfo *DecodedInformation, input byte) byte
                 }
                 deInfo.Heading = computeVectorAngle(y - ((deInfo.MagYMax + deInfo.MagYMin) / 2), x - ((deInfo.MagXMax + deInfo.MagXMin) / 2))
             } else if (serialRead.MessageId == NAZA_MESSAGE_MODULE_VERSION_TYPE) {
-                deInfo.FirmwareVersion.version = byte(pack4FromPayload(serialRead, NAZA_MESSAGE_POS_FW, 0x00))
-                deInfo.HardwareVersion.version = byte(pack4FromPayload(serialRead, NAZA_MESSAGE_POS_HW, 0x00))
+                deInfo.FirmwareVersion.Version = byte(pack4FromPayload(serialRead, NAZA_MESSAGE_POS_FW, 0x00))
+                deInfo.HardwareVersion.Version = byte(pack4FromPayload(serialRead, NAZA_MESSAGE_POS_HW, 0x00))
             }
             return serialRead.MessageId
         } else {
@@ -351,9 +351,24 @@ func decode(serialRead *SerialRead, deInfo *DecodedInformation, input byte) byte
     func int32Conv(b [4]byte) rune {
         return int32(b[0]) | int32(b[1])<<8 | int32(b[2])<<16 | int32(b[3])<<24
     }
+
+
+    func float32Conv(b [4]byte) float32 {
+        return float32(int32(b[0]) | int32(b[1])<<8 | int32(b[2])<<16 | int32(b[3])<<24)
+    }
+
     func int16Conv(b [2]byte) int16 {
         return int16(b[0]) | int16(b[1])<<8
     }
+
+    func pack4Float32FromPayload(serialRead *SerialRead, i byte, mask byte) float32 {
+        var b[4] byte
+        for j := 0; j < 4; j++ {
+          b[j] = serialRead.Payload[int(i) + j] ^ mask
+        }
+        return float32Conv(b)
+    }
+
     func pack4FromPayload(serialRead *SerialRead, i byte, mask byte) rune {
         var b[4] byte
         for j := 0; j < 4; j++ {
