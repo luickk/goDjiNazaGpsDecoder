@@ -5,7 +5,7 @@ import (
   "fmt"
   "math"
   "io"
-  "golang-djiNazaGpsDecoder/go-serial/serial"
+  "goDjiNazaGpsDecoder/go-serial/serial"
 )
 
 // https://github.com/jacobsa/go-serial serial lib
